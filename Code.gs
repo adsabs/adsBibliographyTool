@@ -16,26 +16,44 @@ function initialize() {
   
   ss.insertSheet("Affiliations");
   var affiliationsheet = SpreadsheetApp.getActiveSheet();
-  var affHeaders = [["Affiliation","Ambiguity","Exclude","Start Year","Start Month","End Year","End Month", "API Key"]]
+  var affHeaders = [["Affiliation","Tag","Exclude","StartYear","StartMonth","EndYear","EndMonth", "APIKey"]]
   datarange = affiliationsheet.getRange(1,1,1,affHeaders[0].length);
   datarange.setValues(affHeaders);
   
   ss.insertSheet("AuthorNames");
   var authorsheet = SpreadsheetApp.getActiveSheet();
-  var authorHeaders = [["Identifier", "Identifier Type", "Author Names"]];
+  var authorHeaders = [["Identifier", "AuthorNames"]];
   datarange = authorsheet.getRange(1,1,1,authorHeaders[0].length);
   datarange.setValues(authorHeaders);
   
   ss.insertSheet("BibcodesForNewLibrary");
   var newlibrarysheet = SpreadsheetApp.getActiveSheet();
-  var newlibraryHeaders = [["Bibcode List"]];
+  var newlibraryHeaders = [["BibcodeList"]];
   datarange = newlibrarysheet.getRange(1,1,1,newlibraryHeaders[0].length);
   datarange.setValues(newlibraryHeaders);
 }
 
 
+//create column with counts of bibcodes
+function bibcodeCounts() {
+  var currentsheet = SpreadsheetApp.getActiveSheet();
+  var lastRow = currentsheet.getLastRow();
+  currentsheet.insertColumnAfter(1);
+//  var newcolumn = SpreadsheetApp.getActiveRange();
+  var newcolumn = currentsheet.getRange("B1:B"+lastRow.toString());
+  var countArray = [["BibcodeCount"]];
+  for (var i = 2; i <= lastRow; i++) {
+    var newcell = "=COUNTIF(A:A, A" + i.toString() + ")";
+
+    countArray = countArray.concat([[newcell]]);
+  }
+//  Logger.log(countArray);
+  newcolumn.setValues(countArray);
+}
+
+
 //create date strings
-//used in getResults
+//used in getAffResults and getAuthorResults
 function makeDate() {
   var d = new Date();
   var day = d.getDate();
@@ -65,12 +83,12 @@ function APIQuery(affquery, daterange, token) {
   var options = {
     "headers" : headers
   }
-  var query = 'q=aff:%22' + affquery + '%22&fq=pubdate:%5B' + daterange
-      +  '%5D&fl=bibcode,title,author,aff' + '&rows=2000' ;
+  var query = 'q=aff:%22' + encodeURIComponent(affquery) + '%22&fq=pubdate:%5B' + encodeURIComponent(daterange)
+      +  '%5D&fl=bibcode,title,author,aff,orcid_pub,bibgroup' + '&rows=2000' ;
   var query_url = api_url + 'search/query?' + query;
-  Logger.log(query_url);
+//  Logger.log(query_url);
   var requeststring = UrlFetchApp.getRequest(query_url, options);
-  Logger.log("request string: " + requeststring);
+//  Logger.log("request string: " + requeststring);
   var response = UrlFetchApp.fetch(query_url, options);
   var response_json = JSON.parse(response.getContentText());
   return [response_json.response.docs, query_url]
@@ -78,7 +96,7 @@ function APIQuery(affquery, daterange, token) {
 
 
 //define the dialog that appears when the script is run
-//used in getAffResults()
+//used in getAffResults() and getAuthorResults
 function infoDisplayDialog(authors, affiliations, daterange) {
   var numberofauthors = authors.length - 1;
   var numberofaffiliations = affiliations.length - 1;
@@ -91,6 +109,8 @@ function infoDisplayDialog(authors, affiliations, daterange) {
 
 //main affiliation search function
 function getAffResults() {
+
+  try{
 //select the spreadsheet, and import its sheet data as arrays
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var affiliationsheet = ss.getSheetByName("Affiliations");
@@ -106,7 +126,7 @@ function getAffResults() {
 //populate the authorlist array with author names and their variants by separating the NameString column
   var verifiedauthorlist = []
   for (var i = 1; i < authordata.length; i++) {
-    var authornamevariants = authordata[i][2].split("|");
+    var authornamevariants = authordata[i][1].split("|");
     verifiedauthorlist = verifiedauthorlist.concat(authornamevariants);
   }
   
@@ -142,8 +162,10 @@ function getAffResults() {
       var currentaffiliationresults = BBBdata[j].aff;
       var matchingaffiliations = [];
       var pairedauthors = [];
+      var pairedorcids = [];
       var verifiedauthor = "not verified";
       var excludedaffiliation = "not excluded";
+      var bibgroups = [BBBdata[j].bibgroup];
       
   //loop through the individual affiliations in each affiliation result set     
       for (k = 0; k < currentaffiliationresults.length; k++) {
@@ -154,6 +176,7 @@ function getAffResults() {
         if (singleaffiliationresult.indexOf(matchaff) != -1) {
           matchingaffiliations = matchingaffiliations.concat(singleaffiliationresult);
           pairedauthors = pairedauthors.concat(BBBdata[j].author[k]);
+          pairedorcids = pairedorcids.concat(BBBdata[j].orcid_pub[k]);
           for (m = 0; m < currentexclusionset.length; m++){  
             if (singleaffiliationresult.indexOf(currentexclusionset[m].toLowerCase()) != -1) {
               if (currentexclusionset[m] != "") {
@@ -175,27 +198,40 @@ function getAffResults() {
       }
       
    //add result to the output array
-      
-      outputrows.push([BBBdata[j].bibcode, "https://ui.adsabs.harvard.edu/#abs/" + BBBdata[j].bibcode + "/abstract", BBBdata[j].title[0], currentaffiliationquery, 
-                       currentaffiliationuncertainty, currentaffiliationqueryURL, matchingaffiliations.join("|"), 
-                       excludedaffiliation, pairedauthors.join("|"), verifiedauthor, BBBdata[j].author.length]);
+      outputrows.push([BBBdata[j].bibcode, "https://ui.adsabs.harvard.edu/#abs/" + BBBdata[j].bibcode + "/abstract", BBBdata[j].title[0], bibgroups,
+                      currentaffiliationquery, currentaffiliationuncertainty, currentaffiliationqueryURL, matchingaffiliations.join("|"), 
+                      excludedaffiliation, pairedauthors.join("|"), verifiedauthor, pairedorcids.join("|"), BBBdata[j].author.length]);
     }
   }
     
-  var colHeaders = [["bibcode", "itemLink", "title", "affiliationQuery", "affiliationUncertainty", "affiliationQueryURL", "affiliationMatch", "affiliationExclusion", "pairedAuthors", "verifiedAuthor", "numberOfAuthors"]];
+  var colHeaders = [["Bibcode", "ItemLink", "Title", "Bibgroups", "AffiliationQuery", "Tag", "AffiliationQueryURL", "AffiliationMatch", "AffiliationExclusion", "PairedAuthors", "VerifiedAuthor", "PairedORCIDs", "NumberOfAuthors"]];
 
   outdatarange = outputsheet.getRange(1,1,1,colHeaders[0].length);
   outdatarange.setValues(colHeaders);
   outdatarange = outputsheet.getRange(2,1,outputrows.length,colHeaders[0].length);
   outdatarange.setValues(outputrows);
   
+  bibcodeCounts()
+    
   SpreadsheetApp.getUi()
   .alert('Affiliation Query Complete');
+  }
+  
+  catch(err) {
+    if (err == "Exception: The coordinates or dimensions of the range are invalid.") {
+      SpreadsheetApp.getUi().alert('There were no results for this query. If you expected results check for valid search dates and typos.');
+    }
+    else {
+      SpreadsheetApp.getUi().alert('Error please try again. If the error persists for more than a day please contact support by emailing adshelp@cfa.harvard.edu');
+    }
+  }
 }
 
 
 //main author search function
 function getAuthorResults() {
+  
+  try{
 //select the spreadsheet, and import its sheet data as arrays
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var affiliationsheet = ss.getSheetByName("Affiliations");
@@ -211,7 +247,7 @@ function getAuthorResults() {
 //populate the authorlist array with author names
   var ADSauthorlist = [];
   for (var i = 1; i < authordata.length; i++) {
-    var authornamevariants = authordata[i][2].split("|");
+    var authornamevariants = authordata[i][1].split("|");
 //take just the first version of the author name
     // first version should be most complete to leverage ADS search
     ADSauthorlist = ADSauthorlist.concat(authornamevariants[0]);
@@ -257,13 +293,13 @@ function getAuthorResults() {
     var currentauthorsurname = ADSauthorsurnames[i].toLowerCase();
     var othercurrentauthorsurname = currentauthorquery.split(",")[0].toLowerCase() + ", " + currentauthorquery.split(",")[1].charAt(1).toLowerCase();
     if (currentauthorsurname != othercurrentauthorsurname) {
-      Logger.log("surname mismatch: " + currentauthorsurname + " != " + othercurrentauthorsurname);
+//      Logger.log("surname mismatch: " + currentauthorsurname + " != " + othercurrentauthorsurname);
     }
-    var query = 'q=author:%22' + currentauthorquery + '%22&fq=pubdate:%5B' + querydaterange + '%5D'
-      +  '&fl=bibcode,title,author,aff' + '&rows=2000' ;
+    var query = 'q=%20author%3A%22' + encodeURIComponent(currentauthorquery) + '%22&fq=pubdate:%5B' + encodeURIComponent(querydaterange) + '%5D'
+      +  '&fl=bibcode,title,author,aff,orcid_pub,bibgroup' + '&rows=2000' ;
     var query_url = api_url + 'search/query?' + query;
-    Logger.log("query url")
-    Logger.log(query_url);
+//    Logger.log("query url")
+//    Logger.log(query_url);
     var response = UrlFetchApp.fetch(query_url, options);
     var response_json = JSON.parse(response.getContentText());
     var BBBdata = response_json.response.docs;
@@ -272,7 +308,9 @@ function getAuthorResults() {
     for (j = 0; j < BBBdata.length; j++) {
       var currentauthorresults = BBBdata[j].author
       var matchingauthors = [];
+      var pairedorcids = [];
       var pairedaffiliations = [];
+      var bibgroups = [BBBdata[j].bibgroup];
       
   //loop through the individual authors in each author result set     
       for (k = 0; k < currentauthorresults.length; k++) {
@@ -281,6 +319,7 @@ function getAuthorResults() {
    //add the affiliation that matched and the paired author      
         if (singleauthorresult.indexOf(currentauthorsurname) != -1) {
           matchingauthors = matchingauthors.concat(singleauthorresult);
+          pairedorcids = pairedorcids.concat(BBBdata[j].orcid_pub[k]);
           pairedaffiliations = pairedaffiliations.concat(BBBdata[j].aff[k]);
         }
       }
@@ -290,19 +329,31 @@ function getAuthorResults() {
       outputrows.push(["", "", currentauthorquery, "", "", ""]);
     }
     else {
-      outputrows.push([BBBdata[j].bibcode, "https://ui.adsabs.harvard.edu/#abs/" + BBBdata[j].bibcode + "/abstract", BBBdata[j].title[0], currentauthorquery, matchingauthors.join("|"), pairedaffiliations.join("|"), BBBdata[j].author.length]);
+      outputrows.push([BBBdata[j].bibcode, "https://ui.adsabs.harvard.edu/#abs/" + BBBdata[j].bibcode + "/abstract", BBBdata[j].title[0], bibgroups, currentauthorquery, matchingauthors.join("|"), pairedorcids.join("|"), pairedaffiliations.join("|"), BBBdata[j].author.length]);
      }
     }
   }
-  var colHeaders = [["bibcode", "itemLink", "title", "authorQuery", "authorMatch", "pairedAffiliaions", "numberOfArticleAuthors"]];
+  var colHeaders = [["Bibcode", "ItemLink", "Title", "Bibgroups", "AuthorQuery", "AuthorMatch", "PairedORCIDs", "PairedAffiliaions", "NumberOfArticleAuthors"]];
   
   datarange = authorsheetout.getRange(1,1,1,colHeaders[0].length);
   datarange.setValues(colHeaders);
   datarange = authorsheetout.getRange(2,1,outputrows.length,colHeaders[0].length);
   datarange.setValues(outputrows);
   
-  SpreadsheetApp.getUi()
-  .alert('Author Query Complete');
+  bibcodeCounts()
+    
+  SpreadsheetApp.getUi().alert('Author Query Complete');
+  }
+  
+  catch(err) {
+    if (err == "Exception: The coordinates or dimensions of the range are invalid.") {
+      SpreadsheetApp.getUi().alert('There were no results for this query. If you expected results check for valid search dates and typos.');
+    }
+    else {
+      SpreadsheetApp.getUi().alert('Error: Please try again. If using an author list with more than 100 authors, consider splitting the query into two or more searches. If the error persists for more than a day please contact support by emailing adshelp@cfa.harvard.edu');
+// to see the error use SpreadsheetApp.getUi().alert(err.message);
+    }
+  }
 }
 
 
